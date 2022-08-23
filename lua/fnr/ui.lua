@@ -1,68 +1,119 @@
-local UI = {}
+local Layout = require("nui.layout")
+local Popup = require("nui.popup")
 
-UI.LEFT = "left"
-UI.RIGHT = "right"
-UI.CENTER = "center"
-UI.TOP = "top"
-UI.BOTTOM = "bottom"
+local M = {}
+M._boxes = {}
+M._focused_box_index = 1
+M.close = nil
+M.open = nil
 
-UI.parent_window = nil
-UI.parent_window_props = {
-  width = 0,
-  height = 0
-}
-
-local Box = {}
-
-Box.new = function(col, row, width, height)
-  local self = {}
-
-  local function create_buffer()
-    return vim.api.nvim_create_buf(false, true)
-  end
-
-  local function create_window(buffer)
-    return vim.api.nvim_open_win(buffer, true, {
-      relative = 'win',
-      width = width,
-      height = height,
-      col = col,
-      row = row,
-      border = "rounded"
-    })
-  end
-
-  self.buffer = create_buffer()
-  self.window = create_window(self.buffer)
-  vim.api.nvim_buf_set_lines(self.buffer, 0, 0, false, { "fuck yea" })
-
-  return self
+M._focused_box = function()
+  return M._boxes[M._focused_box_index]
 end
 
-UI.get_x = function (width, align, parent_window_props)
-  assert(align == UI.LEFT or align == UI.RIGHT or align == UI.CENTER, "align is not a valid alignment!")
-  if width >= parent_window_props.width or align == UI.LEFT then
-    return 0
+M._register = function(base_box)
+  if base_box.win_config.focusable or true then
+    table.insert(M._boxes, base_box)
   end
-  if align == UI.RIGHT then
-    return parent_window_props.width - width
-  end
-
-  return math.floor((parent_window_props.width - width) / 2)
 end
 
-UI.open_floating_window = function(width, height, h_align, v_align)
-  UI.parent_window = vim.api.nvim_get_current_win()
-  UI.parent_window_props = {
-    width = vim.api.nvim_win_get_width(UI.parent_window),
-    height = vim.api.nvim_win_get_height(UI.parent_window)
-  }
-  local box = Box.new(
-    UI.get_x(width, h_align or UI.LEFT, UI.parent_window_props), 10, width, height
+M._focus_next = function()
+  M._focused_box_index = M._focused_box_index + 1
+  if M._focused_box_index > #M._boxes then
+    M._focused_box_index = 1
+  end
+  M._focused_box():focus()
+end
+
+M._focus_prev = function()
+  M._focused_box_index = M._focused_box_index - 1
+  if M._focused_box_index < 1 then
+    M._focused_box_index = #M._boxes
+  end
+  M._focused_box():focus()
+end
+
+local BaseBox = Popup:extend("BaseBox")
+function BaseBox:init(popup_options)
+  local options = vim.tbl_deep_extend("force", popup_options or {}, {
+    focusable = true,
+    border = {
+      style = "double",
+      text = {
+        top = "",
+        top_align = "center"
+      },
+      buf_options = {
+        modifiable = true,
+        readonly = false,
+      }
+    }
+  })
+
+  BaseBox.super.init(self, options)
+  M._register(self)
+end
+
+M.FindBox = BaseBox:extend("FindBox")
+function M.FindBox:init()
+  M.FindBox.super.init(self, {
+    enter = true,
+    text = { top = "Find" }
+  })
+end
+
+M.ReplaceBox = BaseBox:extend("ReplaceBox")
+function M.ReplaceBox:init()
+  M.ReplaceBox.super.init(self, {
+    text = { top = "Replace" }
+  })
+end
+
+M.ResultsBox = BaseBox:extend("ResultsBox")
+function M.ResultsBox:init()
+  M.ResultsBox.super.init(self, {
+    text = { top = "Results" }
+  })
+end
+
+M.initLayout = function()
+  return Layout(
+    {
+      position = "50%",
+      size = {
+        width = "80%",
+        height = "80%"
+      }
+    },
+    Layout.Box({
+      Layout.Box(M.FindBox(), { size = "20%" }),
+      Layout.Box(M.ReplaceBox(), { size = "20%" }),
+      Layout.Box(M.ResultsBox(), { size = "60%" })
+    }, { dir = "col" })
   )
 end
 
-UI.open_floating_window(80, 6, UI.CENTER)
+M.open = function()
+  M._boxes = {}
+  M._focused_box_index = 1
+  M._layout = M.initLayout()
+  M._layout:mount()
+  for _, box in ipairs(M._boxes) do
+    box:map("n", "<Tab>", M._focus_next)
+    box:map("n", "<S-Tab>", M._focus_prev)
+    box:map("n", { "q", "<Esc>" }, M.close)
+  end
+end
 
-return UI
+M.close = function()
+  for _, box in ipairs(M._boxes) do
+    box:unmap("n", "<Tab>")
+    box:unmap("n", "<S-Tab>")
+    box:unmap("n",{ "q", "<Esc>" })
+  end
+  M._layout:unmount()
+  M._layout = nil
+end
 
+
+return M
